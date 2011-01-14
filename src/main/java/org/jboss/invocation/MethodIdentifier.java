@@ -76,7 +76,7 @@ public final class MethodIdentifier implements Serializable {
     private static Class<?>[] typesOf(final String[] names, final ClassLoader classLoader) throws ClassNotFoundException {
         final Class<?>[] types = new Class<?>[names.length];
         for (int i = 0, namesLength = names.length; i < namesLength; i++) {
-            types[i] = Class.forName(names[i], false, classLoader);
+            types[i] = PrimitiveClassLoadingUtil.loadClass(names[i], classLoader);
         }
         return types;
     }
