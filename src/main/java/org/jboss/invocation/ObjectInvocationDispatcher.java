@@ -51,15 +51,11 @@ public final class ObjectInvocationDispatcher implements Serializable, Invocatio
     /** {@inheritDoc} */
     public InvocationReply dispatch(final Invocation invocation) throws InvocationException {
         try {
-            return new InvocationReply(invocation.getMethodIdentifier().getPublicMethod(target.getClass()).invoke(target, invocation.getArgs()));
+            return new InvocationReply(invocation.getMethod().invoke(target, invocation.getArgs()));
         } catch (IllegalAccessException e) {
             throw new InvocationException(new IllegalAccessError(e.getMessage()));
         } catch (InvocationTargetException e) {
             throw new InvocationException(e.getCause());
-        } catch (ClassNotFoundException e) {
-            throw new InvocationException(e);
-        } catch (NoSuchMethodException e) {
-            throw new InvocationException(e);
         }
     }
 

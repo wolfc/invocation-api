@@ -21,6 +21,12 @@
  */
 package org.jboss.invocation;
 
+import org.jboss.marshalling.cloner.ClassLoaderClassCloner;
+import org.jboss.marshalling.cloner.ClonerConfiguration;
+import org.jboss.marshalling.cloner.ObjectCloner;
+import org.jboss.marshalling.cloner.ObjectClonerFactory;
+import org.jboss.marshalling.cloner.ObjectCloners;
+
 import java.io.IOException;
 import java.io.InvalidObjectException;
 import java.io.ObjectInputStream;
@@ -28,11 +34,6 @@ import java.io.ObjectOutputStream;
 import java.io.Serializable;
 import java.lang.reflect.Method;
 import java.security.Permission;
-import org.jboss.marshalling.cloner.ClassLoaderClassCloner;
-import org.jboss.marshalling.cloner.ClonerConfiguration;
-import org.jboss.marshalling.cloner.ObjectCloner;
-import org.jboss.marshalling.cloner.ObjectClonerFactory;
-import org.jboss.marshalling.cloner.ObjectCloners;
 
 /**
  * A unified view of a {@link Method} invocation.  Composes the target method, arguments, and mapped context into a single
@@ -60,9 +61,13 @@ public final class Invocation implements Serializable {
      */
     private final Class<?> declaringClass;
     /**
+     * This field contains the method that was invoked.
+     */
+    private Method method;
+    /**
      * This field contains the identifier of the method which was invoked.
      */
-    private final MethodIdentifier methodIdentifier;
+    private transient MethodIdentifier methodIdentifier;
     /**
      * This field contains the invocation properties.  As a special case, if the properties is empty at serialization
      * time, it is written as {@code null} to conserve bandwidth.
@@ -74,54 +79,18 @@ public final class Invocation implements Serializable {
     /**
      * Construct a new instance.
      *
-     * @param properties the invocation properties, or {@code null} for none
-     * @param declaringClass the declaring class of the invoked method
-     * @param methodIdentifier the method identifier of the invoked method
-     * @param args the arguments passed to the invoked method
-     */
-    public Invocation(final InvocationProperties properties, final Class<?> declaringClass, final MethodIdentifier methodIdentifier, final Object[] args) {
-        if (declaringClass == null) {
-            throw new IllegalArgumentException("declaringClass is null");
-        }
-        if (methodIdentifier == null) {
-            throw new IllegalArgumentException("methodIdentifier is null");
-        }
-        this.args = defaulted(args, NO_OBJECTS);
-        this.declaringClass = declaringClass;
-        this.methodIdentifier = methodIdentifier;
-        this.properties = defaulted(properties, InvocationProperties.EMPTY);
-    }
-
-    /**
-     * Construct a new instance.
-     *
-     * @param declaringClass the declaring class of the invoked method
-     * @param methodIdentifier the identifier of the invoked method
-     * @param args the arguments of the original invocation
-     */
-    public Invocation(final Class<?> declaringClass, final MethodIdentifier methodIdentifier, final Object... args) {
-        this(null, declaringClass, methodIdentifier, (Object[]) args);
-    }
-
-    /**
-     * Construct a new instance with no arguments.
-     *
-     * @param declaringClass the declaring class of the invoked method
-     * @param methodIdentifier the identifier of the invoked method
-     */
-    public Invocation(final Class<?> declaringClass, final MethodIdentifier methodIdentifier) {
-        this(null, declaringClass, methodIdentifier, (Object[]) null);
-    }
-
-    /**
-     * Construct a new instance.
-     *
      * @param properties the initial invocation properties
      * @param method the method which was invoked
      * @param args the arguments of the original invocation
      */
     public Invocation(final InvocationProperties properties, final Method method, final Object... args) {
-        this(properties, method.getDeclaringClass(), MethodIdentifier.getIdentifierForMethod(method), args);
+        if (method == null) {
+            throw new IllegalArgumentException("method is null");
+        }
+        this.args = defaulted(args, NO_OBJECTS);
+        this.declaringClass = method.getDeclaringClass();
+        this.method = method;
+        this.properties = defaulted(properties, InvocationProperties.EMPTY);
     }
 
     /**
@@ -131,7 +100,7 @@ public final class Invocation implements Serializable {
      * @param args the arguments of the original invocation
      */
     public Invocation(final Method method, final Object... args) {
-        this(null, method.getDeclaringClass(), MethodIdentifier.getIdentifierForMethod(method), args);
+        this(null, method, args);
     }
 
     //-------------------------------------------------------------------------------------||
@@ -148,12 +117,23 @@ public final class Invocation implements Serializable {
     }
 
     /**
-     * Get the identifier of the method which was invoked.
+     * Get the method which was invoked.
      *
-     * @return the identifier
+     * @return the method
      */
-    public MethodIdentifier getMethodIdentifier() {
-        return methodIdentifier;
+    public Method getMethod() {
+        if (method == null) {
+            try {
+                method = methodIdentifier.getPublicMethod(declaringClass);
+            }
+            catch(ClassNotFoundException e) {
+                throw new IllegalStateException(e);
+            }
+            catch(NoSuchMethodException e) {
+                throw new IllegalStateException(e);
+            }
+        }
+        return method;
     }
 
     /**
@@ -224,7 +204,20 @@ public final class Invocation implements Serializable {
         for (int i = 0; i < args.length; i++) {
             newArgs[i] = cloner.clone(args[i]);
         }
-        return new Invocation(properties, classCloner.clone(declaringClass), methodIdentifier, newArgs);
+        Method method = getMethod();
+        final Class<?> parameterTypes[] = method.getParameterTypes();
+        final Class<?> clonedClass = classCloner.clone(declaringClass);
+        final Class<?> clonedParameterTypes[] = new Class<?>[parameterTypes.length];
+        for (int i = 0; i < parameterTypes.length; i++)
+            clonedParameterTypes[i] = classCloner.clone(parameterTypes[i]);
+        try {
+            final Method clonedMethod = clonedClass.getDeclaredMethod(method.getName(), clonedParameterTypes);
+            return new Invocation(properties, clonedMethod, newArgs);
+        }
+        catch(NoSuchMethodException e) {
+            // since we're looking it up on a cloned class, this should not happen
+            throw new RuntimeException(e);
+        }
     }
 
     //-------------------------------------------------------------------------------------||
@@ -235,6 +228,7 @@ public final class Invocation implements Serializable {
         oos.defaultWriteObject();
         final InvocationProperties properties = this.properties;
         oos.writeObject(properties.isEmpty() ? null : properties);
+        oos.writeObject(methodIdentifier == null ? MethodIdentifier.getIdentifierForMethod(method) : methodIdentifier);
     }
 
     private void readObject(ObjectInputStream ois) throws ClassNotFoundException, IOException {
@@ -242,13 +236,11 @@ public final class Invocation implements Serializable {
         if (args == null) {
             throw new InvalidObjectException("args is null");
         }
-        if (methodIdentifier == null) {
-            throw new InvalidObjectException("methodIdentifier is null");
-        }
         if (declaringClass == null) {
             throw new InvalidObjectException("declaringClass is null");
         }
         properties = defaulted((InvocationProperties) ois.readObject(), InvocationProperties.EMPTY);
+        methodIdentifier = (MethodIdentifier) ois.readObject();
     }
 
     private static <T> T defaulted(T value, T defaultValue) {

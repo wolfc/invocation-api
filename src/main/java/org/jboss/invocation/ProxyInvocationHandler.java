@@ -39,6 +39,22 @@ public final class ProxyInvocationHandler implements InvocationHandler, Serializ
 
     private static final long serialVersionUID = -7550306900997519378L;
 
+    private static final Method METHOD_EQUALS;
+    private static final Method METHOD_HASH_CODE;
+    private static final Method METHOD_TO_STRING;
+
+    static {
+        try {
+            METHOD_EQUALS = Object.class.getDeclaredMethod("equals", Object.class);
+            METHOD_HASH_CODE = Object.class.getDeclaredMethod("hashCode");
+            METHOD_TO_STRING = Object.class.getDeclaredMethod("toString");
+        } catch (SecurityException e) {
+            throw new RuntimeException(e);
+        } catch (NoSuchMethodException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
     /**
      * The invocation dispatcher which should handle the invocation.
      *
@@ -65,15 +81,14 @@ public final class ProxyInvocationHandler implements InvocationHandler, Serializ
      * @throws Throwable the exception to thrown from the method invocation on the proxy instance, if any
      */
     public Object invoke(final Object proxy, final Method method, final Object[] args) throws Throwable {
-        final MethodIdentifier id = MethodIdentifier.getIdentifierForMethod(method);
-        if (id.equals(MethodIdentifier.EQUALS)) {
+        if (method.equals(METHOD_EQUALS)) {
             return Boolean.valueOf(proxy.equals(args[0]));
-        } else if (id.equals(MethodIdentifier.HASH_CODE)) {
+        } else if (method.equals(METHOD_HASH_CODE)) {
             return Integer.valueOf(System.identityHashCode(proxy));
-        } else if (id.equals(MethodIdentifier.TO_STRING)) {
+        } else if (method.equals(METHOD_TO_STRING)) {
             return "Proxy via " + dispatcher;
         } else try {
-            InvocationReply reply = dispatcher.dispatch(new Invocation(method.getDeclaringClass(), id, (Object[]) args));
+            InvocationReply reply = dispatcher.dispatch(new Invocation(method, (Object[]) args));
             return reply.getReply();
         } catch (InvocationException e) {
             throw e.getCause();
